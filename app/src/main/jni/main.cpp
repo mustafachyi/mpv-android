@@ -20,7 +20,7 @@ extern "C" {
 #define ARRAYLEN(a) (sizeof(a)/sizeof(a[0]))
 
 extern "C" {
-    jni_func(void, create, jobject appctx);
+    jni_func(void, native_1create, jobject appctx);
     jni_func(void, init);
     jni_func(void, destroy);
 
@@ -46,7 +46,7 @@ static void prepare_environment(JNIEnv *env, jobject appctx) {
     init_methods_cache(env);
 }
 
-jni_func(void, create, jobject appctx) {
+jni_func(void, native_1create, jobject appctx) {
     prepare_environment(env, appctx);
 
     if (g_mpv)

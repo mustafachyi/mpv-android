@@ -19,22 +19,18 @@ internal class MPVView(context: Context, attrs: AttributeSet) : BaseMPVView(cont
     override fun initOptions() {
         val sharedPreferences = PreferenceManager.getDefaultSharedPreferences(context)
 
-        // apply phone-optimized defaults
         MPVLib.setOptionString("profile", "fast")
 
-        // vo
         setVo(if (sharedPreferences.getBoolean("gpu_next", false))
             "gpu-next"
         else
             "gpu")
 
-        // hwdec
         val hwdec = if (sharedPreferences.getBoolean("hardware_decoding", true))
             HWDECS
         else
             "no"
 
-        // vo: set display fps as reported by android
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             val disp = ContextCompat.getDisplayOrDefault(context)
             val refreshRate = disp.mode.refreshRate
@@ -43,24 +39,19 @@ internal class MPVView(context: Context, attrs: AttributeSet) : BaseMPVView(cont
             MPVLib.setOptionString("display-fps-override", refreshRate.toString())
         } else {
             Log.v(TAG, "Android version too old, disabling refresh rate functionality " +
-                       "(${Build.VERSION.SDK_INT} < ${Build.VERSION_CODES.M})")
+                       "(${Build.VERSION.SDK_INT} < ${Build.VERSION.SDK_INT})")
         }
 
-        // set non-complex options
         data class Property(val preferenceName: String, val mpvOption: String)
         val opts = arrayOf(
                 Property("default_audio_language", "alang"),
                 Property("default_subtitle_language", "slang"),
-
-                // vo-related
                 Property("video_scale", "scale"),
                 Property("video_scale_param1", "scale-param1"),
                 Property("video_scale_param2", "scale-param2"),
-
                 Property("video_downscale", "dscale"),
                 Property("video_downscale_param1", "dscale-param1"),
                 Property("video_downscale_param2", "dscale-param2"),
-
                 Property("video_tscale", "tscale"),
                 Property("video_tscale_param1", "tscale-param1"),
                 Property("video_tscale_param2", "tscale-param2")
@@ -74,7 +65,6 @@ internal class MPVView(context: Context, attrs: AttributeSet) : BaseMPVView(cont
 
         val debandMode = sharedPreferences.getString("video_debanding", "")
         if (debandMode == "gradfun") {
-            // lower the default radius (16) to improve performance
             MPVLib.setOptionString("vf", "gradfun=radius=12")
         } else if (debandMode == "gpu") {
             MPVLib.setOptionString("deband", "yes")
@@ -102,20 +92,17 @@ internal class MPVView(context: Context, attrs: AttributeSet) : BaseMPVView(cont
         MPVLib.setOptionString("tls-verify", "yes")
         MPVLib.setOptionString("tls-ca-file", "${this.context.filesDir.path}/cacert.pem")
         MPVLib.setOptionString("input-default-bindings", "yes")
-        // Limit demuxer cache since the defaults are too high for mobile devices
+        MPVLib.setOptionString("ytdl", "no")
         val cacheMegs = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) 64 else 32
         MPVLib.setOptionString("demuxer-max-bytes", "${cacheMegs * 1024 * 1024}")
         MPVLib.setOptionString("demuxer-max-back-bytes", "${cacheMegs * 1024 * 1024}")
-        //
         val screenshotDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
         screenshotDir.mkdirs()
         MPVLib.setOptionString("screenshot-directory", screenshotDir.path)
-        // workaround for <https://github.com/mpv-player/mpv/issues/14651>
         MPVLib.setOptionString("vd-lavc-film-grain", "cpu")
     }
 
     override fun postInitOptions() {
-        // we need to call write-watch-later manually
         MPVLib.setOptionString("save-position-on-quit", "no")
     }
 
@@ -145,7 +132,6 @@ internal class MPVView(context: Context, attrs: AttributeSet) : BaseMPVView(cont
 
         var mapped = KeyMapping.map.get(event.keyCode)
         if (mapped == null) {
-            // Fallback to produced glyph
             if (!event.isPrintingKey) {
                 if (event.repeatCount == 0)
                     Log.d(TAG, "Unmapped non-printable key ${event.keyCode}")
@@ -154,12 +140,12 @@ internal class MPVView(context: Context, attrs: AttributeSet) : BaseMPVView(cont
 
             val ch = event.unicodeChar
             if (ch.and(KeyCharacterMap.COMBINING_ACCENT) != 0)
-                return false // dead key
+                return false
             mapped = ch.toChar().toString()
         }
 
         if (event.repeatCount > 0)
-            return true // eat event but ignore it, mpv has its own key repeat
+            return true
 
         val mod: MutableList<String> = mutableListOf()
         event.isShiftPressed && mod.add("shift")
@@ -175,7 +161,6 @@ internal class MPVView(context: Context, attrs: AttributeSet) : BaseMPVView(cont
     }
 
     override fun observeProperties() {
-        // This observes all properties needed by MPVView, MPVActivity or other classes
         data class Property(val name: String, val format: Int = MPV_FORMAT_NONE)
         val p = arrayOf(
             Property("time-pos", MPV_FORMAT_INT64),
@@ -219,12 +204,9 @@ internal class MPVView(context: Context, attrs: AttributeSet) : BaseMPVView(cont
     fun loadTracks() {
         for (list in tracks.values) {
             list.clear()
-            // pseudo-track to allow disabling audio/subs
             list.add(Track(-1, context.getString(R.string.track_off)))
         }
         val count = MPVLib.getPropertyInt("track-list/count")!!
-        // Note that because events are async, properties might disappear at any moment
-        // so use ?: continue instead of !!
         for (i in 0 until count) {
             val type = MPVLib.getPropertyString("track-list/$i/type") ?: continue
             if (!tracks.containsKey(type)) {
@@ -278,8 +260,6 @@ internal class MPVView(context: Context, attrs: AttributeSet) : BaseMPVView(cont
         return chapters
     }
 
-    // Property getters/setters
-
     var paused: Boolean?
         get() = MPVLib.getPropertyBoolean("pause")
         set(paused) = MPVLib.setPropertyBoolean("pause", paused!!)
@@ -288,7 +268,6 @@ internal class MPVView(context: Context, attrs: AttributeSet) : BaseMPVView(cont
         get() = MPVLib.getPropertyDouble("time-pos/full")
         set(progress) = MPVLib.setPropertyDouble("time-pos", progress!!)
 
-    /** name of currently active hardware decoder or "no" */
     val hwdecActive: String
         get() = MPVLib.getPropertyString("hwdec-current") ?: "no"
 
@@ -307,9 +286,6 @@ internal class MPVView(context: Context, attrs: AttributeSet) : BaseMPVView(cont
     val estimatedVfFps: Double?
         get() = MPVLib.getPropertyDouble("estimated-vf-fps")
 
-    /**
-     * Returns the video aspect ratio. Rotation is taken into account.
-     */
     fun getVideoAspect(): Double? {
         return MPVLib.getPropertyDouble("video-params/aspect")?.let {
             if (it < 0.001)
@@ -325,7 +301,6 @@ internal class MPVView(context: Context, attrs: AttributeSet) : BaseMPVView(cont
     class TrackDelegate(private val name: String) {
         operator fun getValue(thisRef: Any?, property: KProperty<*>): Int {
             val v = MPVLib.getPropertyString(name)
-            // we can get null here for "no" or other invalid value
             return v?.toIntOrNull() ?: -1
         }
         operator fun setValue(thisRef: Any?, property: KProperty<*>, value: Int) {
@@ -340,8 +315,6 @@ internal class MPVView(context: Context, attrs: AttributeSet) : BaseMPVView(cont
     var sid: Int by TrackDelegate("sid")
     var secondarySid: Int by TrackDelegate("secondary-sid")
     var aid: Int by TrackDelegate("aid")
-
-    // Commands
 
     fun cyclePause() = MPVLib.command(arrayOf("cycle", "pause"))
     fun cycleAudio() = MPVLib.command(arrayOf("cycle", "audio"))
@@ -379,8 +352,6 @@ internal class MPVView(context: Context, attrs: AttributeSet) : BaseMPVView(cont
     }
 
     fun changeShuffle(cycle: Boolean, value: Boolean = true) {
-        // Use the 'shuffle' property to store the shuffled state, since changing
-        // it at runtime doesn't do anything.
         val state = getShuffle()
         val newState = if (cycle) state.xor(value) else value
         if (state == newState)
@@ -391,8 +362,6 @@ internal class MPVView(context: Context, attrs: AttributeSet) : BaseMPVView(cont
 
     companion object {
         private const val TAG = "mpv"
-
-        // mpv option `hwdec` is set to this
         private const val HWDECS = "mediacodec,mediacodec-copy"
     }
 }

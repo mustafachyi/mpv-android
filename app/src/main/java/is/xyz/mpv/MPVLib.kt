@@ -1,10 +1,9 @@
 package `is`.xyz.mpv
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Bitmap
 import android.view.Surface
-
-// Wrapper for native library
 
 @Suppress("unused")
 object MPVLib {
@@ -15,7 +14,17 @@ object MPVLib {
         }
     }
 
-    external fun create(appctx: Context)
+    @SuppressLint("StaticFieldLeak")
+    var context: Context? = null
+        private set
+
+    private external fun native_create(appctx: Context)
+
+    fun create(appctx: Context) {
+        context = appctx.applicationContext
+        native_create(appctx)
+    }
+
     external fun init()
     external fun destroy()
     external fun attachSurface(surface: Surface)
@@ -37,6 +46,7 @@ object MPVLib {
     external fun setPropertyString(property: String, value: String)
 
     external fun observeProperty(property: String, format: Int)
+    external fun initYoutubeStreamSelector()
 
     private val observers = mutableListOf<EventObserver>()
 
