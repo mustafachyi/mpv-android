@@ -45,9 +45,13 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.core.view.isVisible
 import androidx.core.view.updateLayoutParams
+import androidx.lifecycle.lifecycleScope
 import androidx.media.AudioAttributesCompat
 import androidx.media.AudioFocusRequestCompat
 import androidx.media.AudioManagerCompat
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.lang.IllegalArgumentException
 import kotlin.math.roundToInt
@@ -282,6 +286,9 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
 
         updateOrientation(true)
 
+        player.addObserver(this)
+        player.initialize(filesDir.path, cacheDir.path)
+
         // Parse the intent
         val filepath = parsePathFromIntent(intent)
         if (intent.action == Intent.ACTION_VIEW) {
@@ -295,9 +302,12 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
             return
         }
 
-        player.addObserver(this)
-        player.initialize(filesDir.path, cacheDir.path)
-        player.playFile(filepath)
+        val videoId = extractVideoId(filepath)
+        if (videoId != null) {
+            playYoutubeUrl(videoId, "replace")
+        } else {
+            player.playFile(filepath)
+        }
 
         mediaSession = initMediaSession()
         updateMediaSession()
@@ -357,17 +367,18 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
 
         // Happens when mpv is still running (not necessarily playing) and the user selects a new
         // file to be played from another app
-        val filepath = intent?.let { parsePathFromIntent(it) }
-        if (filepath == null) {
-            return
-        }
+        val filepath = intent?.let { parsePathFromIntent(it) } ?: return
+        val videoId = extractVideoId(filepath)
+        val loadAction = if (!activityIsForeground && didResumeBackgroundPlayback) "append" else "replace"
 
-        if (!activityIsForeground && didResumeBackgroundPlayback) {
-            MPVLib.command(arrayOf("loadfile", filepath, "append"))
-            showToast(getString(R.string.notice_file_appended))
-            moveTaskToBack(true)
+        if (videoId != null) {
+            playYoutubeUrl(videoId, loadAction)
         } else {
-            MPVLib.command(arrayOf("loadfile", filepath))
+            MPVLib.command(arrayOf("loadfile", filepath, loadAction))
+            if (loadAction == "append") {
+                showToast(getString(R.string.notice_file_appended))
+                moveTaskToBack(true)
+            }
         }
     }
 
@@ -378,8 +389,11 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
     private fun isPlayingAudioOnly(): Boolean {
         if (!isPlayingAudio)
             return false
+        if (player.vid == -1) // No video track is active
+            return true
+        // A video track is active, check if it's just album art
         val image = MPVLib.getPropertyString("current-tracks/video/image")
-        return image.isNullOrEmpty() || image == "yes"
+        return image == "yes"
     }
 
     private fun shouldBackground(): Boolean {
@@ -1074,6 +1088,76 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
                 pushOption("force-media-title", it)
         }
         // TODO: `headers` would be good, maybe `tls_verify`
+    }
+
+    // YouTube playback logic
+
+    private fun isYoutubeUrl(url: String): Boolean {
+        val youtubeDomains = arrayOf("youtu.be/", "youtube.com/")
+        return youtubeDomains.any { url.contains(it, ignoreCase = true) }
+    }
+
+    private fun extractVideoId(url: String): String? {
+        if (!isYoutubeUrl(url)) {
+            return null
+        }
+        val patterns = arrayOf(
+            "(?<=watch\\?v=)[\\w-]+",
+            "(?<=youtu\\.be/)[\\w-]+",
+            "(?<=/shorts/)[\\w-]+",
+            "(?<=/embed/)[\\w-]+",
+            "(?<=/live/)[\\w-]+",
+            "(?<=/v/)[\\w-]+"
+        )
+        return patterns.asSequence()
+            .mapNotNull { Regex(it).find(url)?.value }
+            .firstOrNull()
+    }
+
+    private fun playYoutubeUrl(videoId: String, loadAction: String) {
+        lifecycleScope.launch {
+            try {
+                val youtubeData = withContext(Dispatchers.IO) {
+                    val jsonData = try {
+                        YoutubeHttpClient.fetchYoutubeData(videoId, useIos = false)
+                    } catch (e: Exception) {
+                        YoutubeHttpClient.fetchYoutubeData(videoId, useIos = true)
+                    }
+                    YoutubeResponseParser.parseResponse(jsonData)
+                }
+
+                val selectedStreamIndex = StreamSelector.selectStream(this@MPVActivity, youtubeData)
+                if (selectedStreamIndex == -1) return@launch // User cancelled
+
+                onloadCommands.clear()
+                onloadCommands.add(arrayOf("set", "file-local-options/force-media-title", youtubeData.title))
+                onloadCommands.add(arrayOf("set", "file-local-options/media-title", youtubeData.title))
+
+                if (selectedStreamIndex == StreamSelector.AUDIO_ONLY_INDEX) {
+                    // Audio only
+                    val audioUrl = "lavf://${youtubeData.audio.url}"
+                    onloadCommands.add(arrayOf("set", "file-local-options/vid", "no"))
+                    MPVLib.command(arrayOf("loadfile", audioUrl, loadAction))
+                } else {
+                    // Video + Audio
+                    val videoUrl = "lavf://${youtubeData.videos[selectedStreamIndex].url}"
+                    val audioUrl = "lavf://${youtubeData.audio.url}"
+
+                    onloadCommands.add(arrayOf("set", "file-local-options/vid", "1"))
+                    onloadCommands.add(arrayOf("audio-add", audioUrl, "select"))
+
+                    MPVLib.command(arrayOf("loadfile", videoUrl, loadAction))
+                }
+
+                if (loadAction == "append") {
+                    showToast(getString(R.string.notice_file_appended))
+                    moveTaskToBack(true)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error playing YouTube URL: ${e.message}")
+                showToast("Error: ${e.message ?: "Unknown YouTube error"}")
+            }
+        }
     }
 
     // UI (Part 2)
